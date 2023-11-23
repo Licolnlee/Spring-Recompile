@@ -1,9 +1,6 @@
 package com.whu.service;
 
-import com.spring.Component;
-import com.spring.Scope;
+public interface UserService {
 
-@Component("userService")
-//@Scope("singleton")
-public class UserService {
+        void test();
 }

@@ -1,7 +1,11 @@
 package com.spring;
 
 import java.io.File;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -11,6 +15,8 @@ public class WhuApplicationContext {
 
     private final ConcurrentHashMap<String, Object> singletonObjects = new ConcurrentHashMap<>();//单例池
     private final ConcurrentHashMap<String, BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>();//beanDefinitionMap,存放beanDefinition,扫描到的所有的类定义都存在这个map中
+
+    private final List<BeanPostProcessor> beanPostProcessorList = new ArrayList<>();// beanPostProcessorList,存放beanPostProcessor
 
 
     //构造Spring容器的底层实现
@@ -28,7 +34,7 @@ public class WhuApplicationContext {
             BeanDefinition value = entry.getValue();
             if ("singleton".equals(value.getScope())) {
                 //如果是单例bean，则在容器启动的时候就要创建好bean对象，然后放入单例池中
-                Object bean = createBean(value);//创建bean对象
+                Object bean = createBean(beanName, value);//创建bean对象
                 singletonObjects.put(beanName, bean);
             }
         }
@@ -36,15 +42,52 @@ public class WhuApplicationContext {
 
     }
 
-    public Object createBean(BeanDefinition beanDefinition) {
+    public Object createBean(String beanName, BeanDefinition beanDefinition) {
+        //实例化之前做一些事情
+
+        //创建实例化bean对象
         Class clazz = beanDefinition.getClazz();
+        //实例化之后做一些事情
         try {
             Object instance = clazz.newInstance();
+            //依赖注入，需要将当前bean中的所有的autowired注解的属性进行注入,需要对属性进行赋值
+            for (Field declaredField : clazz.getDeclaredFields()) {
+                if (declaredField.isAnnotationPresent(Autowired.class)) {
+                    //如果当前属性有autowired注解，则需要进行注入
+                    //需要注入的属性，需要从容器中获取,那么首先需要从spring容器中（单例池）根据属性类型或者属性名获取bean对象
+                    Object bean = getBean(declaredField.getName());//根据属性名获取bean对象
+                    declaredField.setAccessible(true);//设置属性可以被访问
+                    declaredField.set(instance, bean);//给属性赋值
+                }
+            }
+
+            //Aware回调
+            //判断当前这个类或者这个实例是否实现了BeanNameAware接口，如果实现了，则需要调用setBeanName方法
+            if (instance instanceof BeanNameAware) {
+                ((BeanNameAware) instance).setBeanName(beanName);
+            }
+            //初始化之前做一些事情
+            for (BeanPostProcessor beanPostProcessor : beanPostProcessorList) {
+                instance = beanPostProcessor.postProcessBeforeInitialization(instance, beanName);//对当前的bean对象进行初始化前的额外加工处理
+            }
+            //初始化
+            if (instance instanceof InitializingBean) {
+                ((InitializingBean) instance).afterPropertiesSet();//初始化bean之后执行的方法,进行一些初始化操作，比如说一些初始化逻辑的执行如初始化数据库连接池
+            }
+            //初始化之后做一些事情
+            for (BeanPostProcessor beanPostProcessor : beanPostProcessorList) {
+                instance = beanPostProcessor.postProcessAfterInitialization(instance, beanName);//对当前的bean对象进行初始化后的额外加工处理
+            }
+
+
+
             return instance;
         } catch (InstantiationException e) {
             e.printStackTrace();
         } catch (IllegalAccessException e) {
             e.printStackTrace();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
         return null;
     }
@@ -66,15 +109,25 @@ public class WhuApplicationContext {
                 String fileName = file1.getAbsolutePath();//获取文件的绝对路径
                 if (fileName.endsWith(".class")) {//判断是否是class文件
 
-                    String classPath = fileName.substring(fileName.indexOf("com/"), fileName.indexOf(".class")).replace(File.separator, ".");//获取文件的class路径
-                    System.out.println(classPath);
+                    String classPath = fileName.substring(fileName.indexOf("com".concat(File.separator)), fileName.indexOf(".class")).replace(File.separator, ".");//获取文件的class路径
+//                    System.out.println(classPath);
                     try {
                         Class<?> aClass = classLoader.loadClass(classPath);
                         if (aClass.isAnnotationPresent(Component.class)) {
+
+
                             //如果有component注解，则表示当前这个类是一个bean
                             //class-->bean 如果是一个bean，则需要创建一个bean对象（不一定，要根据bean的作用域进行判断，bean 的作用域有单例也有原型）
                             //解析类，判断当前bean是单例还是原型，如果是单例，则将bean对象放入单例池中，如果是原型，则不放入单例池中
                             //如果每次都解析非常麻烦，所以引出了beanDefinition，每个类都有scope和相应的beanName来定义对应的bean对象，将解析的类封装成beanDefinition，然后将beanDefinition放入beanDefinitionMap中
+
+                            //发现bean，但是这个bean比较特殊，发现是一个beanPostProcessor，那么需要将这个beanPostProcessor放入beanPostProcessorList中
+                            if (BeanPostProcessor.class.isAssignableFrom(aClass)) {//判断当前这个类是否是BeanPostProcessor的子类或者子接口
+                                BeanPostProcessor o = (BeanPostProcessor) aClass.getDeclaredConstructor().newInstance();//创建beanPostProcessor对象
+                                //创建完之后，需要将beanPostProcessor对象放入beanPostProcessorList中
+                                beanPostProcessorList.add(o);//将beanPostProcessor对象放入beanPostProcessorList中
+                            }
+
 
                             Component component = aClass.getDeclaredAnnotation(Component.class);
                             String beanName = component.value();//获取beanName
@@ -92,6 +145,14 @@ public class WhuApplicationContext {
                         }
                     } catch (ClassNotFoundException e) {
                         e.printStackTrace();
+                    } catch (InvocationTargetException e) {
+                        throw new RuntimeException(e);
+                    } catch (InstantiationException e) {
+                        throw new RuntimeException(e);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException(e);
+                    } catch (NoSuchMethodException e) {
+                        throw new RuntimeException(e);
                     }
 
                 }
@@ -107,7 +168,7 @@ public class WhuApplicationContext {
             if (beanDefinition.getScope().equals("singleton")) {//如果是单例的，则从单例池中获取
                 Object o = singletonObjects.get(beanName);
                 if (o == null) {//如果单例池中没有，则创建一个bean对象，然后放入单例池中
-                    Object bean = createBean(beanDefinition);
+                    Object bean = createBean(beanName, beanDefinition);
                     return bean;
 //                    //创建bean对象
 //                    Class clazz = beanDefinition.getClazz();
@@ -126,7 +187,7 @@ public class WhuApplicationContext {
 
             } else {//不是单例bean，而是prototype bean,每一次都要去创建一个新的bean对象
                 //创建bean对象
-                return createBean(beanDefinition);
+                return createBean(beanName, beanDefinition);
 //                Class clazz = beanDefinition.getClazz();
 //                try {
 //                    Object instance = clazz.newInstance();
