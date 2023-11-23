@@ -2,6 +2,7 @@ package com.spring;
 
 import java.io.File;
 import java.net.URL;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class WhuApplicationContext {
@@ -22,11 +23,13 @@ public class WhuApplicationContext {
 
         scan(configClass);
 
-        for (BeanDefinition value : beanDefinitionMap.values()) {
-            if (value.getScope().equals("singleton")) {
+        for (Map.Entry<String,BeanDefinition> entry : beanDefinitionMap.entrySet()) {
+            String beanName = entry.getKey();
+            BeanDefinition value = entry.getValue();
+            if ("singleton".equals(value.getScope())) {
                 //如果是单例bean，则在容器启动的时候就要创建好bean对象，然后放入单例池中
                 Object bean = createBean(value);//创建bean对象
-                singletonObjects.put(value.getClazz().getName(), bean);
+                singletonObjects.put(beanName, bean);
             }
         }
 
@@ -63,7 +66,7 @@ public class WhuApplicationContext {
                 String fileName = file1.getAbsolutePath();//获取文件的绝对路径
                 if (fileName.endsWith(".class")) {//判断是否是class文件
 
-                    String classPath = fileName.substring(fileName.indexOf("com"), fileName.indexOf(".class")).replace("\\", ".");//获取文件的class路径
+                    String classPath = fileName.substring(fileName.indexOf("com/"), fileName.indexOf(".class")).replace(File.separator, ".");//获取文件的class路径
                     System.out.println(classPath);
                     try {
                         Class<?> aClass = classLoader.loadClass(classPath);
@@ -123,20 +126,21 @@ public class WhuApplicationContext {
 
             } else {//不是单例bean，而是prototype bean,每一次都要去创建一个新的bean对象
                 //创建bean对象
-                Class clazz = beanDefinition.getClazz();
-                try {
-                    Object instance = clazz.newInstance();
-                    return instance;
-                } catch (InstantiationException e) {
-                    e.printStackTrace();
-                } catch (IllegalAccessException e) {
-                    e.printStackTrace();
-                }
+                return createBean(beanDefinition);
+//                Class clazz = beanDefinition.getClazz();
+//                try {
+//                    Object instance = clazz.newInstance();
+//                    return instance;
+//                } catch (InstantiationException e) {
+//                    e.printStackTrace();
+//                } catch (IllegalAccessException e) {
+//                    e.printStackTrace();
+//                }
 
             }
         } else {
             throw new NullPointerException();//如果不存在，简单处理抛出异常
         }
-        return null;
+//        return null;
     }
 }
